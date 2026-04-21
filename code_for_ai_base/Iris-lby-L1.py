@@ -40,9 +40,10 @@ X_test = torch.from_numpy(scaler.transform(X_test_raw))
 y_test = torch.from_numpy(y_test)
 
 LR = 0.01
-L1_LAMBDA = 0.01
+L1_LAMBDA = 0
 EPOCHS = 300
 BATCH_SIZE = 16
+
 
 class SoftmaxRegression:
     def __init__(self, n_features, n_classes):
@@ -55,24 +56,24 @@ class SoftmaxRegression:
     def predict(self, X):
         return torch.argmax(self.forward(X), dim=1)
 
-#mini
 def train(model, X_train, y_train, X_val, y_val, lr, l1_lambda, batch_size, epochs, seed=42):
     torch.manual_seed(seed)
     np.random.seed(seed)
     n_samples = X_train.shape[0]
     history = {'train_loss': [], 'val_loss': [], 'val_acc': []}
 
+    marked_epochs = []
+    marked_losses = []
+
     for epoch in range(epochs):
         perm = torch.randperm(n_samples)
         X_shuffled = X_train[perm]
         y_shuffled = y_train[perm]
 
-        # Mini-batch 循环
         for i in range(0, n_samples, batch_size):
             X_batch = X_shuffled[i:i + batch_size]
             y_batch = y_shuffled[i:i + batch_size]
 
-            #0-grid
             if model.W.grad is not None: model.W.grad.zero_()
             if model.b.grad is not None: model.b.grad.zero_()
 
@@ -92,7 +93,8 @@ def train(model, X_train, y_train, X_val, y_val, lr, l1_lambda, batch_size, epoc
             train_logits = model.forward(X_train)
             train_ce = F.cross_entropy(train_logits, y_train)
             train_loss = train_ce + l1_lambda * torch.sum(torch.abs(model.W)) if l1_lambda > 0 else train_ce
-            history['train_loss'].append(train_loss.item())
+            current_train_loss = train_loss.item()
+            history['train_loss'].append(current_train_loss)
 
             val_logits = model.forward(X_val)
             val_loss = F.cross_entropy(val_logits, y_val).item()
@@ -101,17 +103,34 @@ def train(model, X_train, y_train, X_val, y_val, lr, l1_lambda, batch_size, epoc
             history['val_loss'].append(val_loss)
             history['val_acc'].append(val_acc)
 
-    return history
+            if (epoch + 1) % 50 == 0 or epoch == 0:
+                print(f"[Epoch {epoch + 1:03d}/{epochs}] Train Loss: {current_train_loss:.6f}")
+                marked_epochs.append(epoch)
+                marked_losses.append(current_train_loss)
+
+    return history, marked_epochs, marked_losses
 
 model = SoftmaxRegression(n_features=4, n_classes=3)
-history = train(model, X_train, y_train, X_val, y_val,
-                lr=LR, l1_lambda=L1_LAMBDA, batch_size=BATCH_SIZE, epochs=EPOCHS)
+history, marked_epochs, marked_losses = train(
+    model, X_train, y_train, X_val, y_val,
+    lr=LR, l1_lambda=L1_LAMBDA, batch_size=BATCH_SIZE, epochs=EPOCHS
+)
 
-print(f"准确率: {history['val_acc'][-1]:.4f}")
+print(f"最终验证集准确率: {history['val_acc'][-1]:.4f}")
 
 plt.figure(figsize=(10, 6))
-plt.plot(history['train_loss'], label='Train Loss', linewidth=2)
-plt.plot(history['val_loss'], label='Val Loss', linewidth=2)
+plt.plot(history['train_loss'], label='Train Loss', linewidth=2, color='blue')
+plt.plot(history['val_loss'], label='Val Loss', linewidth=2, color='orange')
+
+plt.scatter(marked_epochs, marked_losses, color='red', s=80, zorder=5, label='Marked Epochs')
+for ep, loss in zip(marked_epochs, marked_losses):
+    plt.annotate(f'Ep{ep + 1}\n{loss:.3f}',
+                 xy=(ep, loss),
+                 xytext=(ep + 15, loss + 0.3),
+                 fontsize=9,
+                 arrowprops=dict(arrowstyle='->', color='gray', lw=0.8),
+                 bbox=dict(boxstyle='round,pad=0.3', facecolor='yellow', alpha=0.6))
+
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
 plt.title(f'Loss Curve (lr={LR}, L1_lambda={L1_LAMBDA})')
@@ -121,8 +140,20 @@ plt.tight_layout()
 plt.savefig(f'loss_lr{LR}_l1{L1_LAMBDA}.png', dpi=150)
 plt.show()
 
+print("\n========== 模型权重矩阵 W ==========")
+print(model.W.detach().numpy())
+print("\n偏置 b:")
+print(model.b.detach().numpy())
+
+if L1_LAMBDA > 0:
+    zero_ratio = (torch.abs(model.W) < 1e-4).float().mean().item()
+    print(f"\n权重矩阵中接近0的比例: {zero_ratio:.2%}")
+
+with torch.no_grad():
+    y_pred = model.predict(X_test).numpy()
 
 cm = confusion_matrix(y_test.numpy(), y_pred)
+
 class_names = iris.target_names
 plt.figure(figsize=(7, 6))
 plt.imshow(cm, cmap='Blues')
